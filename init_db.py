@@ -71,19 +71,19 @@ CREATE TABLE IF NOT EXISTS rl_metrics (
 """)
 
 # Default admin
-cur.execute("SELECT * FROM users WHERE username = ?", ("admin@gmail.com",))
+cur.execute("SELECT * FROM users WHERE username = ?", ("poreddykarthikreddy000@gmail.com",))
 if not cur.fetchone():
     cur.execute("""
     INSERT INTO users (username, password, role, full_name, phone)
     VALUES (?, ?, ?, ?, ?)
     """, (
-        "admin@gmail.com",
-        hash_password("admin123"),
+        "poreddykarthikreddy000@gmail.com",
+        hash_password("ka292005"),
         "admin",
         "System Administrator",
         "9999999999"
     ))
-    print("Default admin: admin@gmail.com / admin123")
+    print("Default admin: poreddykarthikreddy000@gmail.com / ka292005")
 
 # Default team member
 cur.execute("SELECT * FROM users WHERE username = ?", ("team1@gmail.com",))

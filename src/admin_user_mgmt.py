@@ -35,4 +35,4 @@ def admin_user_management():
     st.markdown("### 📋 Existing Users")
     users = list_users()
     for uid, email, role, fullname, phone in users:
-        st.write(f"👤 {fullname or email} — `{email}` — ({role}) — 📞 {phone or '-'}")
+        st.write(f"{fullname or email} — `{email}` — ({role}) — 📞 {phone or '-'}")

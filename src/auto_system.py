@@ -10,6 +10,7 @@ from ui_alert import assign_rescue_units, get_district_hospitals, get_district_s
 from movement import assign_route_to_unit
 from db_logs import save_alert, save_assignment
 from admin_user_mgmt import get_team_members
+from commentary import add_commentary
 
 def generate_random_alert_in_district(env):
     """Generate a random alert within the state boundaries."""
@@ -52,12 +53,13 @@ def should_generate_new_alert():
     return time_since_last >= random.uniform(30, 60)
 
 def get_available_units():
-    """Get units that are available for deployment (idle or arrived)."""
+    """Get units that are available for deployment (strictly idle and unassigned to targets)."""
     units = st.session_state.get("unit_positions", {})
     available = []
     for uid, u in units.items():
         status = u.get("status", "idle")
-        if status in ("idle", "arrived") and u.get("status") != "failed":
+        target_type = u.get("target_type")
+        if status in ("idle", "arrived") and status != "failed" and target_type is None:
             available.append((uid, u))
     return available
 
@@ -73,30 +75,42 @@ def auto_deploy_units_to_alert(alert_lat, alert_lon, env, alert_id):
         # Create dummy team members if none exist
         team_members = [("Dummy", "team@rescue.com")]
     
-    # Find available units
+    # Find available units using the proper filter
+    available_units = get_available_units()
     candidates = []
-    for uid, u in units.items():
-        status = u.get("status", "idle")
-        if status in ("idle", "arrived") and u.get("status") != "failed":
-            d = distance_km(alert_lat, alert_lon, u["y"], u["x"])
-            candidates.append((d, uid, u))
+    for uid, u in available_units:
+        d = distance_km(alert_lat, alert_lon, u["y"], u["x"])
+        candidates.append((d, uid, u))
     
     if not candidates:
         return
     
     candidates.sort(key=lambda x: x[0])
     
-    # Deploy up to 4 units per alert
-    dispatch_units = candidates[:4]
+    # Deploy top 3 nearest available units per alert
+    dispatch_units = candidates[:3]
+    
+    # Add commentary for multiple units deployment
+    if len(dispatch_units) > 1:
+        add_commentary("multiple_units_deployed",
+                      count=len(dispatch_units),
+                      severity=st.session_state.get("active_alerts", [{}])[-1].get("severity", "Unknown") if st.session_state.get("active_alerts") else "Unknown")
     
     member_idx = 0
     for _, uid, u in dispatch_units:
-        if u.get("assigned_to") is None:
-            member = team_members[member_idx % len(team_members)]
-            assigned_email = member[1] if len(member) > 1 else member[0]
-            u["assigned_to"] = assigned_email
-            save_assignment(uid, assigned_email, alert_id)
+        member = team_members[member_idx % len(team_members)]
+        assigned_email = member[1] if len(member) > 1 else member[0]
+        u["assigned_to"] = assigned_email
+        u["active_alert_id"] = alert_id
+        save_assignment(uid, assigned_email, alert_id)
         
+        # Add commentary for unit assignment
+        add_commentary("unit_assigned",
+                      unit_type=u["type"],
+                      unit_id=uid,
+                      team_member=assigned_email)
+        
+        member_idx += 1
         auto_dispatch_unit_to_alert(uid, alert_lat, alert_lon, env)
 
 def auto_dispatch_unit_to_alert(uid, alert_lat, alert_lon, env):
@@ -110,11 +124,24 @@ def auto_dispatch_unit_to_alert(uid, alert_lat, alert_lon, env):
             route_nodes = env.shortest_path(u["sim_id"], alert_node)
             if route_nodes:
                 assign_route_to_unit(uid, route_nodes, env)
+                from movement import fetch_osrm_curve
+                last_pt = u["route"][-1] if u.get("route") else (u["x"], u["y"])
+                curve = fetch_osrm_curve(last_pt[0], last_pt[1], alert_lon, alert_lat)
+                if curve: u["route"].extend(curve[1:] if len(curve) > 1 else curve)
                 u["status"] = "moving"
                 u["target_type"] = "alert"
                 u["target_location"] = (alert_lat, alert_lon)
-        except Exception:
-            pass
+                
+                # Add commentary for unit deployment
+                add_commentary("unit_deployed",
+                              unit_type=u["type"],
+                              unit_id=uid,
+                              lat=alert_lat,
+                              lon=alert_lon)
+        except Exception as e:
+            # If a unit cannot find a path to the alert, report it to the UI instead of silently failing
+            print(f"Routing error for {uid}: {e}")
+            st.toast(f"⚠️ {uid} cannot find a route to the alert: Network Island", icon="❌")
 
 def check_and_handle_arrivals(env):
     """Check if units have arrived and route them to final destinations."""
@@ -131,22 +158,63 @@ def check_and_handle_arrivals(env):
                 if u["type"] == "ambulance":
                     target = min(hospitals, key=lambda h: distance_km(alert_lat, alert_lon, *h["loc"]))
                     dest_lat, dest_lon = target["loc"]
+                    destination_type = "hospital"
                 else:
                     target = min(shelters, key=lambda h: distance_km(alert_lat, alert_lon, *h["loc"]))
                     dest_lat, dest_lon = target["loc"]
+                    destination_type = "shelter"
                 
                 dest_node = get_closest_node(env, dest_lat, dest_lon)
                 if dest_node is not None:
                     route_nodes = env.shortest_path(u["sim_id"], dest_node)
                     if route_nodes:
                         assign_route_to_unit(uid, route_nodes, env)
+                        from movement import fetch_osrm_curve
+                        last_pt = u["route"][-1] if u.get("route") else (u["x"], u["y"])
+                        curve = fetch_osrm_curve(last_pt[0], last_pt[1], dest_lon, dest_lat)
+                        if curve: u["route"].extend(curve[1:] if len(curve) > 1 else curve)
                         u["status"] = "moving"
                         u["target_type"] = "destination"
                         u["target_location"] = (dest_lat, dest_lon)
+                        
+                        # Add commentary for routing to destination
+                        add_commentary("unit_routing_destination",
+                                      unit_type=u["type"],
+                                      unit_id=uid,
+                                      destination_type=destination_type)
             except Exception:
                 # If routing fails, mark as idle
                 u["status"] = "idle"
                 u["target_type"] = None
+        
+        # When units finish the entire sequence (arrive at hospital/shelter)
+        elif u.get("status") == "arrived" and u.get("target_type") == "destination":
+            u["status"] = "idle"
+            u["target_type"] = None
+            u["target_location"] = None
+            u["assigned_to"] = None
+            u["active_alert_id"] = None
+            
+            # Dynamically update the unit's sim_id (spawn node) to the hospital/shelter node
+            # so future routing computes paths from its current physical location, not original base
+            closest_node = get_closest_node(env, u["y"], u["x"])
+            if closest_node is not None:
+                u["sim_id"] = closest_node
+                
+            u.pop("route", None)
+            
+            # Since the mission is completely done, we can mark the alert as resolved 
+            # by clearing `active_alerts` if this was the final unit related to it.
+            # Simplified approach: Once ANY unit successfully returns, count alert as resolved
+            if "active_alerts" in st.session_state and st.session_state["active_alerts"]:
+                st.session_state["active_alerts"].clear()
+                st.session_state["alert_active"] = False
+                
+                # Add commentary for alert resolution
+                add_commentary("mission_accomplished",
+                              unit_type=u["type"],
+                              unit_id=uid)
+                st.toast("✅ Unit returned to base. Alert fully resolved!", icon="🎉")
 
 def run_automatic_system(env):
     """Main function to run automatic alert generation and deployment."""
@@ -171,7 +239,7 @@ def run_automatic_system(env):
                 "lon": alert_data["lon"],
                 "severity": alert_data["severity"],
                 "time": time.time(),
-                "deployed": False
+                "deployed": False # Important: not deployed yet
             }
             st.session_state["active_alerts"].append(alert_info)
             st.session_state["last_alert_time"] = time.time()
@@ -181,10 +249,30 @@ def run_automatic_system(env):
             st.session_state["alert_location"] = (alert_data["lat"], alert_data["lon"])
             st.session_state["current_alert_id"] = alert_id
             
-            # Auto-deploy units (with small delay to avoid conflicts)
-            auto_deploy_units_to_alert(alert_data["lat"], alert_data["lon"], env, alert_id)
-            alert_info["deployed"] = True
+            # Add commentary for alert generation
+            add_commentary("alert_generated",
+                          severity=alert_data["severity"],
+                          lat=alert_data["lat"],
+                          lon=alert_data["lon"],
+                          area=alert_data["area"])
     
+    # Continuously attempt to deploy available units to unsettled alerts
+    for alert in st.session_state["active_alerts"]:
+        if not alert.get("deployed"):
+            # Check if any units are available to take it
+            available_units = get_available_units()
+            if available_units:
+                auto_deploy_units_to_alert(alert["lat"], alert["lon"], env, alert["id"])
+                # Only mark deployed if at least one unit was actually assigned and starts moving
+                deployed_success = False
+                for uid, u in st.session_state.get("unit_positions", {}).items():
+                    if u.get("target_type") == "alert" and u.get("target_location") == (alert["lat"], alert["lon"]):
+                        deployed_success = True
+                        break
+                
+                if deployed_success:
+                    alert["deployed"] = True
+        
     # Handle unit arrivals and route to final destinations
     check_and_handle_arrivals(env)
     

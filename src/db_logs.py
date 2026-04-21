@@ -1,9 +1,14 @@
 import sqlite3
 import os
 
-DB_PATH = os.path.join("database", "users.db")
+# Get the project root directory (parent of src/)
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DB_PATH = os.path.join(PROJECT_ROOT, "database", "users.db")
 
 def _conn():
+    # Ensure database directory exists
+    db_dir = os.path.dirname(DB_PATH)
+    os.makedirs(db_dir, exist_ok=True)
     return sqlite3.connect(DB_PATH)
 
 def save_alert(lat, lon, sev):

@@ -1,0 +1,5 @@
+unit_deployed - 🚑 Emergency response unit unit_20 (Ambulance) is now en route to the alert location (28.5860, 77.3367).
+unit_assigned - 📋 Ambulance unit_20 is now under the command of team1@gmail.com for the emergency response mission.
+unit_deployed - 🏃 Police unit_19 deployed and moving towards emergency location (28.5860, 77.3367).
+unit_assigned - 🎯 Police unit_19 assigned to team1@gmail.com. Team coordination established for effective response.
+multiple_units_deployed - 🏃 Large-scale deployment initiated: 2 units are now en route to the emergency location to ensure maximum rescue capacity.

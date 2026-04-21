@@ -180,8 +180,8 @@ ai_disaster_rescue/
 After running `init_db.py`, the following default accounts are created:
 
 ### Admin Account
-- **Username**: `admin@gmail.com`
-- **Password**: `admin123`
+- **Username**: `poreddykarthikreddy000@gmail.com`
+- **Password**: `ka292005`
 - **Role**: Admin
 
 ### Team Member Account
